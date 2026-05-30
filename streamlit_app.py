@@ -12,6 +12,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
 import plotly.graph_objects as go
+from urllib.parse import quote_plus
 
 # ============================================================
 # PAGE CONFIG
@@ -529,6 +530,346 @@ EXERCISE_LIBRARY = {
     ]
 }
 
+# ============================================================
+# EXERCISE COMPREHENSION LAYER (decoupled from the recommendation engine)
+# Plain-language descriptor + form cues + common mistake per exercise.
+# Anything not listed still gets a universal 'Watch demo' search link.
+# ============================================================
+EXERCISE_INFO = {
+    "Push-Ups": {
+        "desc": "A classic bodyweight press — lower your chest to the floor and push back up.",
+        "cues": [
+            "Keep your body in one straight line, head to heels.",
+            "Lower until your elbows reach about 90°.",
+            "Push the floor away; don't flare elbows out wide."
+        ],
+        "mistake": "Letting the hips sag or pike up instead of staying straight."
+    },
+    "Dumbbell Press": {
+        "desc": "Lie on a bench and press two dumbbells up from chest level.",
+        "cues": [
+            "Plant your feet, slight natural arch in the back.",
+            "Lower the weights to chest level under control.",
+            "Press up and slightly together at the top."
+        ],
+        "mistake": "Bouncing the weights off your chest."
+    },
+    "Incline Push-Ups": {
+        "desc": "A push-up with your hands on a raised surface — easier than the floor version.",
+        "cues": [
+            "Hands on a bench, box, or wall.",
+            "Hold a straight line from head to heels.",
+            "Lower your chest toward the surface, then press up."
+        ],
+        "mistake": "Letting the hips pike up or sag."
+    },
+    "Chest Flyes": {
+        "desc": "Lying down, open and close your arms in a wide arc to work the chest.",
+        "cues": [
+            "Keep a slight, fixed bend in the elbows.",
+            "Lower in a wide arc until you feel a chest stretch.",
+            "Squeeze the chest to bring the weights back together."
+        ],
+        "mistake": "Bending the elbows so it turns into a press."
+    },
+    "Decline Push-Ups": {
+        "desc": "A push-up with your feet raised — shifts the work to the upper chest.",
+        "cues": [
+            "Feet on a bench or step, hands on the floor.",
+            "Keep your core tight and body straight.",
+            "Lower your chest, then press up."
+        ],
+        "mistake": "Letting the lower back arch under the load."
+    },
+    "Dumbbell Rows": {
+        "desc": "Bend at the hips and pull a dumbbell up toward your waist.",
+        "cues": [
+            "Flat back, soft knees, hinge forward.",
+            "Drive your elbow up and back toward your waist.",
+            "Lower slowly under control."
+        ],
+        "mistake": "Shrugging or rounding the back to lift heavier."
+    },
+    "Superman Hold": {
+        "desc": "Lie face-down and lift your arms, chest and legs off the floor.",
+        "cues": [
+            "Reach your arms forward, legs straight back.",
+            "Lift everything a few inches and hold.",
+            "Keep your neck relaxed and eyes down."
+        ],
+        "mistake": "Cranking your head up and straining the neck."
+    },
+    "Resistance Band Row": {
+        "desc": "Pull a band toward you, squeezing your shoulder blades together.",
+        "cues": [
+            "Anchor the band; start with arms straight ahead.",
+            "Pull your elbows back past your ribs.",
+            "Squeeze the shoulder blades, then return slowly."
+        ],
+        "mistake": "Pulling with the arms only and ignoring the back."
+    },
+    "Lat Pulldown": {
+        "desc": "Pull a bar down toward your upper chest to build the lats.",
+        "cues": [
+            "Grip slightly wider than your shoulders.",
+            "Pull the bar to your upper chest, elbows down.",
+            "Control the bar back up — don't let it yank you."
+        ],
+        "mistake": "Leaning way back and using momentum."
+    },
+    "Pull-Ups": {
+        "desc": "Hang from a bar and pull your chin above it.",
+        "cues": [
+            "Start from a full hang, shoulders engaged.",
+            "Pull your elbows down toward your sides.",
+            "Lower all the way down with control."
+        ],
+        "mistake": "Swinging or kipping instead of a controlled pull."
+    },
+    "Bodyweight Squats": {
+        "desc": "Sit your hips back and down, then stand tall.",
+        "cues": [
+            "Feet shoulder-width, toes slightly out.",
+            "Push your hips back as you bend the knees.",
+            "Keep your chest up and heels planted."
+        ],
+        "mistake": "Letting the knees cave inward."
+    },
+    "Lunges": {
+        "desc": "Step forward and lower until both knees are bent about 90°.",
+        "cues": [
+            "Step forward, drop the back knee toward the floor.",
+            "Front knee tracks over the foot, not past the toes.",
+            "Push through the front heel to stand."
+        ],
+        "mistake": "Letting the front knee collapse inward."
+    },
+    "Glute Bridges": {
+        "desc": "Lie on your back and lift your hips by squeezing your glutes.",
+        "cues": [
+            "Feet flat, knees bent, arms by your sides.",
+            "Drive through your heels to lift the hips.",
+            "Squeeze the glutes hard at the top."
+        ],
+        "mistake": "Arching the lower back instead of using the glutes."
+    },
+    "Step-Ups": {
+        "desc": "Step up onto a raised surface, driving through the front leg.",
+        "cues": [
+            "Place your whole foot on the step.",
+            "Drive through the heel to stand tall.",
+            "Lower slowly — don't just drop down."
+        ],
+        "mistake": "Pushing off the back foot instead of the top leg."
+    },
+    "Wall Sit": {
+        "desc": "Hold a seated position against a wall with no chair.",
+        "cues": [
+            "Back flat on the wall, thighs parallel to the floor.",
+            "Knees stacked over the ankles at about 90°.",
+            "Breathe steadily and hold."
+        ],
+        "mistake": "Letting the hips creep up to make it easier."
+    },
+    "Romanian Deadlift": {
+        "desc": "Hinge at the hips to lower the weight down the front of your legs.",
+        "cues": [
+            "Soft knees; push your hips back.",
+            "Keep the weight close to your legs.",
+            "Feel the hamstring stretch, then squeeze up."
+        ],
+        "mistake": "Rounding the back or turning it into a squat."
+    },
+    "Calf Raises": {
+        "desc": "Rise up onto the balls of your feet to work the calves.",
+        "cues": [
+            "Stand tall, push through the balls of your feet.",
+            "Rise as high as you can; pause at the top.",
+            "Lower slowly for a full stretch."
+        ],
+        "mistake": "Bouncing quickly with a tiny range of motion."
+    },
+    "Shoulder Press": {
+        "desc": "Press weights overhead from shoulder height.",
+        "cues": [
+            "Start at shoulder level, elbows under wrists.",
+            "Press straight up while bracing your core.",
+            "Lower under control to the start."
+        ],
+        "mistake": "Arching the lower back to push the weight up."
+    },
+    "Lateral Raises": {
+        "desc": "Raise the dumbbells out to your sides to shoulder height.",
+        "cues": [
+            "Keep a slight bend in the elbows.",
+            "Lead with the elbows up to shoulder height.",
+            "Lower slowly — resist the drop."
+        ],
+        "mistake": "Swinging the weights up with momentum."
+    },
+    "Arnold Press": {
+        "desc": "A shoulder press that rotates the palms as you press up.",
+        "cues": [
+            "Start with palms facing you near your chin.",
+            "Rotate and press overhead in one smooth motion.",
+            "Reverse the rotation on the way down."
+        ],
+        "mistake": "Rushing the rotation and losing control."
+    },
+    "Front Raises": {
+        "desc": "Raise the weights straight in front of you to shoulder height.",
+        "cues": [
+            "Arms nearly straight, palms facing down.",
+            "Raise to shoulder height — no higher.",
+            "Lower slowly without swinging."
+        ],
+        "mistake": "Using the back to heave the weight up."
+    },
+    "Rear Delt Flyes": {
+        "desc": "Bent forward, raise the weights out to the sides for the rear shoulders.",
+        "cues": [
+            "Hinge forward about 45°, slight elbow bend.",
+            "Raise the weights out to the sides.",
+            "Squeeze the rear shoulders, then lower slowly."
+        ],
+        "mistake": "Standing too upright and using the traps."
+    },
+    "Bicep Curls": {
+        "desc": "Curl the weights up toward your shoulders.",
+        "cues": [
+            "Pin your elbows to your sides.",
+            "Curl up and squeeze the biceps.",
+            "Lower slowly all the way down."
+        ],
+        "mistake": "Swinging the body to lift the weight."
+    },
+    "Tricep Dips": {
+        "desc": "Lower and press your body on a bench or bars to work the triceps.",
+        "cues": [
+            "Hands by your hips, elbows pointing back.",
+            "Lower until your elbows reach about 90°.",
+            "Press back up, staying controlled."
+        ],
+        "mistake": "Flaring the elbows wide or dropping too deep."
+    },
+    "Hammer Curls": {
+        "desc": "Curl with a neutral, thumbs-up grip for biceps and forearms.",
+        "cues": [
+            "Palms facing each other throughout.",
+            "Keep your elbows fixed at your sides.",
+            "Curl up, then lower slowly."
+        ],
+        "mistake": "Letting the elbows swing forward."
+    },
+    "Overhead Extension": {
+        "desc": "Extend a weight overhead to work the triceps.",
+        "cues": [
+            "Weight behind your head, elbows pointing up.",
+            "Straighten the elbows to extend up.",
+            "Keep the elbows from flaring outward."
+        ],
+        "mistake": "Letting the elbows flare and the back arch."
+    },
+    "Close-Grip Push-Ups": {
+        "desc": "A push-up with the hands close together to target the triceps.",
+        "cues": [
+            "Hands under your chest, close together.",
+            "Keep your elbows tucked close to the body.",
+            "Lower and press in a straight line."
+        ],
+        "mistake": "Letting the elbows flare out to the sides."
+    },
+    "Plank": {
+        "desc": "Hold a straight-body position on your forearms.",
+        "cues": [
+            "Elbows under shoulders, body in a straight line.",
+            "Brace your abs and squeeze the glutes.",
+            "Don't let the hips sag or pike up."
+        ],
+        "mistake": "Dropping the hips or holding your breath."
+    },
+    "Crunches": {
+        "desc": "Curl your upper back off the floor to contract the abs.",
+        "cues": [
+            "Hands light by your head — don't pull the neck.",
+            "Curl the shoulders up using your abs.",
+            "Lower slowly under control."
+        ],
+        "mistake": "Yanking on the neck to come up."
+    },
+    "Leg Raises": {
+        "desc": "Lift your straight legs up while lying on your back.",
+        "cues": [
+            "Press your lower back into the floor.",
+            "Lift the legs toward vertical, then lower slowly.",
+            "Stop before the lower back arches up."
+        ],
+        "mistake": "Letting the lower back lift off the floor."
+    },
+    "Russian Twists": {
+        "desc": "Rotate your torso side to side in a seated lean-back.",
+        "cues": [
+            "Lean back slightly, feet up or down.",
+            "Rotate from the torso, not just the arms.",
+            "Tap each side under control."
+        ],
+        "mistake": "Only moving the arms while the torso stays still."
+    },
+    "Mountain Climbers": {
+        "desc": "From a plank, drive your knees toward your chest one at a time.",
+        "cues": [
+            "Strong plank, shoulders over hands.",
+            "Drive one knee in, then switch.",
+            "Keep the hips low and steady."
+        ],
+        "mistake": "Bouncing the hips high with each rep."
+    },
+    "Dead Bug": {
+        "desc": "On your back, lower the opposite arm and leg while keeping the core braced.",
+        "cues": [
+            "Press your lower back flat to the floor.",
+            "Extend the opposite arm and leg slowly.",
+            "Return, then switch sides."
+        ],
+        "mistake": "Letting the lower back pop off the floor."
+    },
+    "Side Plank": {
+        "desc": "Hold your body in a straight line on one forearm, facing sideways.",
+        "cues": [
+            "Elbow under shoulder; stack or stagger the feet.",
+            "Lift the hips into a straight line.",
+            "Hold tall — don't let the hips drop."
+        ],
+        "mistake": "Letting the hips sink toward the floor."
+    },
+    "Hollow Body Hold": {
+        "desc": "On your back, lift your shoulders and legs into a shallow 'banana' shape.",
+        "cues": [
+            "Press the lower back firmly into the floor.",
+            "Lift the shoulders and legs a few inches.",
+            "Reach long through the arms and toes."
+        ],
+        "mistake": "Arching the back so it lifts off the floor."
+    }
+}
+
+
+def get_exercise_info(name, muscles=""):
+    """Decoupled comprehension layer. Returns plain-language descriptor, form
+    cues, common mistake and a demo link. Curated entries fall back gracefully
+    to a universal YouTube 'how to' search so every exercise has a demo."""
+    demo = "https://www.youtube.com/results?search_query=" + quote_plus("how to " + name + " proper form")
+    info = EXERCISE_INFO.get(name)
+    if info:
+        return {"desc": info.get("desc", ""), "cues": info.get("cues", []),
+                "mistake": info.get("mistake", ""), "demo": info.get("demo", demo)}
+    return {"desc": "",
+            "cues": ["Move slowly and with control through a full, pain-free range.",
+                     "Keep good posture and a braced core throughout."],
+            "mistake": "Rushing the reps or using momentum instead of muscle.",
+            "demo": demo}
+
+
 def pick_exercises(group, count=3, blocked=[], modified=[], injury_part=None, severity=None):
     if group in blocked: return []
     if group in modified and injury_part and severity:
@@ -833,18 +1174,31 @@ def build_workout_plan(user_profile, injury_profile=None):
                     html += (f"<div style='font-size:0.65rem;letter-spacing:0.15em;color:#6B7280;"
                              f"text-transform:uppercase;margin:0.75rem 0 0.5rem;'>-- {group.upper()}</div>")
                 for name,sets_reps,weight,muscles,progression in exercises:
+                    _info = get_exercise_info(name, muscles)
+                    _cues = "".join(f"<li style='margin-bottom:3px;'>{c}</li>" for c in _info["cues"])
+                    _desc = (f"<div style='font-size:0.8rem;color:#C7CDD6;margin-bottom:5px;line-height:1.4;'>{_info['desc']}</div>" if _info["desc"] else "")
                     html += (
-                        f"<div style='background:#161B24;border-radius:10px;"
-                        f"padding:0.9rem 1.1rem;margin-bottom:0.6rem;"
-                        f"border-left:3px solid {color};"
-                        f"display:grid;grid-template-columns:1fr auto;gap:0.5rem;align-items:start;'>"
-                        f"<div><div style='font-size:1.05rem;font-weight:700;color:#F0F2F5;margin-bottom:4px;'>{name}</div>"
+                        f"<div style='background:#161B24;border-radius:10px;padding:0.9rem 1.1rem;"
+                        f"margin-bottom:0.6rem;border-left:3px solid {color};'>"
+                        f"<div style='display:grid;grid-template-columns:1fr auto;gap:0.5rem;align-items:start;'>"
+                        f"<div><div style='font-size:1.05rem;font-weight:700;color:#F0F2F5;margin-bottom:3px;'>{name}</div>"
+                        f"{_desc}"
                         f"<div style='font-size:0.78rem;color:#9CA3AF;margin-bottom:6px;'>{muscles}</div>"
                         f"<div style='font-size:0.75rem;color:#6B7280;font-style:italic;'>^ {progression}</div></div>"
                         f"<div style='text-align:right;flex-shrink:0;'>"
                         f"<div style='font-size:1.1rem;font-weight:800;color:{color};'>{sets_reps}</div>"
                         f"<div style='font-size:0.72rem;color:#6B7280;margin-top:2px;'>{weight}</div>"
                         f"</div></div>"
+                        f"<details style='margin-top:0.6rem;'>"
+                        f"<summary style='cursor:pointer;font-size:0.72rem;font-weight:700;letter-spacing:0.08em;"
+                        f"text-transform:uppercase;color:{color};'>How to do it</summary>"
+                        f"<div style='margin-top:0.6rem;padding-top:0.6rem;border-top:1px solid rgba(255,255,255,0.06);'>"
+                        f"<ul style='margin:0 0 0.5rem 1.1rem;padding:0;font-size:0.8rem;color:#C7CDD6;line-height:1.55;'>{_cues}</ul>"
+                        f"<div style='font-size:0.78rem;color:#F2A3A3;margin-bottom:0.6rem;'>Avoid: {_info['mistake']}</div>"
+                        f"<a href='{_info['demo']}' target='_blank' style='display:inline-block;font-size:0.72rem;"
+                        f"font-weight:700;color:#000;background:{color};padding:6px 12px;border-radius:6px;text-decoration:none;'>\u25b6 Watch demo</a>"
+                        f"</div></details>"
+                        f"</div>"
                     )
             if not day_has:
                 html += (
