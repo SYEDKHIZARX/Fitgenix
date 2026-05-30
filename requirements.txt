@@ -1,0 +1,11 @@
+# FITGENIX — Streamlit Community Cloud dependencies
+# Pinned to the exact local versions that created scaler.pkl / ga_model.pkl /
+# q_table.pkl, so the pickles load identically in the cloud.
+
+streamlit==1.57.0
+numpy==2.4.4
+pandas==3.0.2
+plotly==6.7.0
+scikit-learn==1.8.0
+joblib==1.5.3
+fpdf2
