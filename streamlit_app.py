@@ -872,59 +872,70 @@ def get_exercise_info(name, muscles=""):
 
 
 # ============================================================
-# INLINE MOVEMENT PREVIEWS (offline-capable visual demos)
-# Each exercise maps to a movement archetype rendered as animated SVG.
-# These render in-browser with zero external requests, so the visual
-# demo works on slow/blocked networks once the app page has loaded.
+# MOVEMENT PREVIEWS (real photographic demonstrations)
+# Each exercise maps to two real demo photos (start + finish position)
+# from the public-domain free-exercise-db. The two frames cross-fade into
+# an honest, accurate movement loop. Exercises without an accurate match
+# show NO image (cues + full video only) -- never a misleading visual.
+# Images are HTTP-verified; an onerror handler hides the block if a photo
+# ever fails to load, so a broken image is never shown.
 # ============================================================
-_EXERCISE_PATTERN = {
-    "Push-Ups":"pushup","Incline Push-Ups":"pushup","Decline Push-Ups":"pushup",
-    "Close-Grip Push-Ups":"pushup","Dumbbell Press":"pushup","Chest Flyes":"pushup",
-    "Tricep Dips":"pushup",
-    "Shoulder Press":"press","Arnold Press":"press","Overhead Extension":"press",
-    "Lateral Raises":"press","Front Raises":"press",
-    "Dumbbell Rows":"row","Resistance Band Row":"row","Lat Pulldown":"row",
-    "Pull-Ups":"row","Rear Delt Flyes":"row",
-    "Bodyweight Squats":"squat","Wall Sit":"squat","Step-Ups":"squat","Lunges":"squat",
-    "Romanian Deadlift":"hinge","Glute Bridges":"hinge","Calf Raises":"hinge",
-    "Bicep Curls":"curl","Hammer Curls":"curl",
-    "Plank":"hold","Side Plank":"hold","Superman Hold":"hold",
-    "Hollow Body Hold":"hold","Dead Bug":"hold",
-    "Crunches":"core","Leg Raises":"core","Russian Twists":"core","Mountain Climbers":"core",
-}
-
-_ANIM_LABEL = {
-    "pushup":"Horizontal press","press":"Overhead press","row":"Pull / row",
-    "squat":"Squat","hinge":"Hip hinge","curl":"Curl","hold":"Static hold",
-    "core":"Core","default":"Movement",
-}
-
-_ANIM_SVG = {
-"pushup":"<svg viewBox='0 0 180 96' width='100%' height='86'><line x1='14' y1='86' x2='166' y2='86' stroke='#2A2F38' stroke-width='3'/><g stroke='COLOR' stroke-width='4' fill='none' stroke-linecap='round'><animateTransform attributeName='transform' type='translate' values='0 0;0 16;0 0' dur='1.6s' repeatCount='indefinite'/><circle cx='132' cy='40' r='7' fill='COLOR' stroke='none'/><line x1='126' y1='44' x2='48' y2='58'/><line x1='110' y1='47' x2='110' y2='86'/><line x1='64' y1='55' x2='64' y2='86'/><line x1='48' y1='58' x2='30' y2='86'/></g></svg>",
-"press":"<svg viewBox='0 0 160 110' width='100%' height='96'><g stroke='COLOR' stroke-width='4' fill='none' stroke-linecap='round'><circle cx='80' cy='42' r='8' fill='COLOR' stroke='none'/><line x1='80' y1='50' x2='72' y2='84'/><line x1='80' y1='50' x2='88' y2='84'/><line x1='72' y1='84' x2='66' y2='104'/><line x1='88' y1='84' x2='94' y2='104'/><line x1='80' y1='56' x2='58' y2='44'><animate attributeName='y2' values='44;20;44' dur='1.7s' repeatCount='indefinite'/></line><line x1='80' y1='56' x2='102' y2='44'><animate attributeName='y2' values='44;20;44' dur='1.7s' repeatCount='indefinite'/></line><line x1='50' y1='42' x2='110' y2='42' stroke-width='5'><animate attributeName='y1' values='42;18;42' dur='1.7s' repeatCount='indefinite'/><animate attributeName='y2' values='42;18;42' dur='1.7s' repeatCount='indefinite'/></line></g></svg>",
-"row":"<svg viewBox='0 0 170 110' width='100%' height='96'><g stroke='COLOR' stroke-width='4' fill='none' stroke-linecap='round'><circle cx='52' cy='40' r='8' fill='COLOR' stroke='none'/><line x1='56' y1='46' x2='104' y2='64'/><line x1='104' y1='64' x2='100' y2='100'/><line x1='104' y1='64' x2='124' y2='98'/><line x1='80' y1='55' x2='100' y2='86'><animate attributeName='x2' values='100;74;100' dur='1.4s' repeatCount='indefinite'/><animate attributeName='y2' values='86;60;86' dur='1.4s' repeatCount='indefinite'/></line><circle cx='100' cy='90' r='6' fill='COLOR' stroke='none'><animate attributeName='cx' values='100;74;100' dur='1.4s' repeatCount='indefinite'/><animate attributeName='cy' values='90;62;90' dur='1.4s' repeatCount='indefinite'/></circle></g></svg>",
-"squat":"<svg viewBox='0 0 160 120' width='100%' height='100'><line x1='28' y1='112' x2='132' y2='112' stroke='#2A2F38' stroke-width='3'/><g stroke='COLOR' stroke-width='4' fill='none' stroke-linecap='round'><circle cx='80' cy='30' r='8' fill='COLOR' stroke='none'><animate attributeName='cy' values='30;52;30' dur='1.8s' repeatCount='indefinite'/></circle><line x1='80' y1='38' x2='80' y2='68'><animate attributeName='y1' values='38;60;38' dur='1.8s' repeatCount='indefinite'/><animate attributeName='y2' values='68;82;68' dur='1.8s' repeatCount='indefinite'/></line><line x1='80' y1='68' x2='60' y2='90'><animate attributeName='y1' values='68;82;68' dur='1.8s' repeatCount='indefinite'/></line><line x1='60' y1='90' x2='60' y2='112'/><line x1='80' y1='68' x2='100' y2='90'><animate attributeName='y1' values='68;82;68' dur='1.8s' repeatCount='indefinite'/></line><line x1='100' y1='90' x2='100' y2='112'/></g></svg>",
-"hinge":"<svg viewBox='0 0 170 120' width='100%' height='100'><line x1='30' y1='112' x2='140' y2='112' stroke='#2A2F38' stroke-width='3'/><g stroke='COLOR' stroke-width='4' fill='none' stroke-linecap='round'><line x1='84' y1='72' x2='74' y2='112'/><line x1='84' y1='72' x2='94' y2='112'/><g><animateTransform attributeName='transform' type='rotate' values='0 84 72;58 84 72;0 84 72' dur='2s' repeatCount='indefinite'/><line x1='84' y1='72' x2='84' y2='30'/><circle cx='84' cy='22' r='8' fill='COLOR' stroke='none'/><line x1='84' y1='40' x2='84' y2='66'/><circle cx='84' cy='70' r='5' fill='COLOR' stroke='none'/></g></g></svg>",
-"curl":"<svg viewBox='0 0 150 120' width='100%' height='100'><g stroke='COLOR' stroke-width='4' fill='none' stroke-linecap='round'><circle cx='72' cy='26' r='8' fill='COLOR' stroke='none'/><line x1='72' y1='34' x2='72' y2='76'/><line x1='72' y1='76' x2='60' y2='108'/><line x1='72' y1='76' x2='84' y2='108'/><line x1='72' y1='42' x2='66' y2='72'/><line x1='66' y1='72' x2='88' y2='74'><animate attributeName='x2' values='88;72;88' dur='1.3s' repeatCount='indefinite'/><animate attributeName='y2' values='74;46;74' dur='1.3s' repeatCount='indefinite'/></line><circle cx='88' cy='74' r='6' fill='COLOR' stroke='none'><animate attributeName='cx' values='88;72;88' dur='1.3s' repeatCount='indefinite'/><animate attributeName='cy' values='74;46;74' dur='1.3s' repeatCount='indefinite'/></circle></g></svg>",
-"hold":"<svg viewBox='0 0 190 86' width='100%' height='80'><line x1='14' y1='80' x2='176' y2='80' stroke='#2A2F38' stroke-width='3'/><g stroke='COLOR' stroke-width='4' fill='none' stroke-linecap='round'><animateTransform attributeName='transform' type='translate' values='0 0;0 3;0 0' dur='2.4s' repeatCount='indefinite'/><circle cx='154' cy='42' r='7' fill='COLOR' stroke='none'/><line x1='148' y1='46' x2='44' y2='66'/><line x1='120' y1='54' x2='120' y2='80'/><line x1='120' y1='80' x2='104' y2='80'/><line x1='44' y1='66' x2='28' y2='80'/></g></svg>",
-"core":"<svg viewBox='0 0 180 100' width='100%' height='90'><line x1='16' y1='90' x2='164' y2='90' stroke='#2A2F38' stroke-width='3'/><g stroke='COLOR' stroke-width='4' fill='none' stroke-linecap='round'><line x1='96' y1='90' x2='78' y2='62'/><line x1='78' y1='62' x2='56' y2='74'/><g><animateTransform attributeName='transform' type='rotate' values='0 96 90;-30 96 90;0 96 90' dur='1.5s' repeatCount='indefinite'/><line x1='96' y1='90' x2='132' y2='74'/><circle cx='137' cy='71' r='7' fill='COLOR' stroke='none'/></g></g></svg>",
-"default":"<svg viewBox='0 0 120 100' width='100%' height='90'><g stroke='COLOR' stroke-width='4' fill='none' stroke-linecap='round'><circle cx='60' cy='30' r='9' fill='COLOR' stroke='none'><animate attributeName='r' values='9;7;9' dur='1.6s' repeatCount='indefinite'/></circle><line x1='60' y1='39' x2='60' y2='72'/><line x1='60' y1='48' x2='42' y2='60'><animate attributeName='y2' values='60;52;60' dur='1.6s' repeatCount='indefinite'/></line><line x1='60' y1='48' x2='78' y2='60'><animate attributeName='y2' values='60;52;60' dur='1.6s' repeatCount='indefinite'/></line><line x1='60' y1='72' x2='48' y2='94'/><line x1='60' y1='72' x2='72' y2='94'/></g></svg>",
+_IMG_BASE = "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/"
+_EXERCISE_IMAGES = {
+    "Arnold Press": ["Arnold_Dumbbell_Press/0.jpg", "Arnold_Dumbbell_Press/1.jpg"],
+    "Bicep Curls": ["Dumbbell_Bicep_Curl/0.jpg", "Dumbbell_Bicep_Curl/1.jpg"],
+    "Bodyweight Squats": ["Bodyweight_Squat/0.jpg", "Bodyweight_Squat/1.jpg"],
+    "Calf Raises": ["Standing_Calf_Raises/0.jpg", "Standing_Calf_Raises/1.jpg"],
+    "Chest Flyes": ["Dumbbell_Flyes/0.jpg", "Dumbbell_Flyes/1.jpg"],
+    "Close-Grip Push-Ups": ["Push-Ups_-_Close_Triceps_Position/0.jpg", "Push-Ups_-_Close_Triceps_Position/1.jpg"],
+    "Crunches": ["Crunches/0.jpg", "Crunches/1.jpg"],
+    "Dead Bug": ["Dead_Bug/0.jpg", "Dead_Bug/1.jpg"],
+    "Decline Push-Ups": ["Decline_Push-Up/0.jpg", "Decline_Push-Up/1.jpg"],
+    "Dumbbell Press": ["Dumbbell_Bench_Press/0.jpg", "Dumbbell_Bench_Press/1.jpg"],
+    "Dumbbell Rows": ["Bent_Over_Two-Dumbbell_Row/0.jpg", "Bent_Over_Two-Dumbbell_Row/1.jpg"],
+    "Front Raises": ["Front_Dumbbell_Raise/0.jpg", "Front_Dumbbell_Raise/1.jpg"],
+    "Glute Bridges": ["Butt_Lift_Bridge/0.jpg", "Butt_Lift_Bridge/1.jpg"],
+    "Hammer Curls": ["Hammer_Curls/0.jpg", "Hammer_Curls/1.jpg"],
+    "Incline Push-Ups": ["Incline_Push-Up/0.jpg", "Incline_Push-Up/1.jpg"],
+    "Lat Pulldown": ["Wide-Grip_Lat_Pulldown/0.jpg", "Wide-Grip_Lat_Pulldown/1.jpg"],
+    "Lateral Raises": ["Side_Lateral_Raise/0.jpg", "Side_Lateral_Raise/1.jpg"],
+    "Leg Raises": ["Flat_Bench_Lying_Leg_Raise/0.jpg", "Flat_Bench_Lying_Leg_Raise/1.jpg"],
+    "Lunges": ["Bodyweight_Walking_Lunge/0.jpg", "Bodyweight_Walking_Lunge/1.jpg"],
+    "Mountain Climbers": ["Mountain_Climbers/0.jpg", "Mountain_Climbers/1.jpg"],
+    "Overhead Extension": ["Standing_Dumbbell_Triceps_Extension/0.jpg", "Standing_Dumbbell_Triceps_Extension/1.jpg"],
+    "Plank": ["Plank/0.jpg", "Plank/1.jpg"],
+    "Pull-Ups": ["Pullups/0.jpg", "Pullups/1.jpg"],
+    "Push-Ups": ["Pushups/0.jpg", "Pushups/1.jpg"],
+    "Rear Delt Flyes": ["Reverse_Flyes/0.jpg", "Reverse_Flyes/1.jpg"],
+    "Resistance Band Row": ["Seated_Cable_Rows/0.jpg", "Seated_Cable_Rows/1.jpg"],
+    "Romanian Deadlift": ["Romanian_Deadlift/0.jpg", "Romanian_Deadlift/1.jpg"],
+    "Russian Twists": ["Russian_Twist/0.jpg", "Russian_Twist/1.jpg"],
+    "Shoulder Press": ["Dumbbell_Shoulder_Press/0.jpg", "Dumbbell_Shoulder_Press/1.jpg"],
+    "Side Plank": ["Side_Bridge/0.jpg", "Side_Bridge/1.jpg"],
+    "Step-Ups": ["Dumbbell_Step_Ups/0.jpg", "Dumbbell_Step_Ups/1.jpg"],
+    "Superman Hold": ["Superman/0.jpg", "Superman/1.jpg"],
+    "Tricep Dips": ["Dips_-_Triceps_Version/0.jpg", "Dips_-_Triceps_Version/1.jpg"],
 }
 
 def get_exercise_animation(name, color="#E8FF00"):
-    """Returns an inline animated SVG movement preview for an exercise.
-    Pure in-browser SVG -> no network needed once the page has loaded."""
-    pat = _EXERCISE_PATTERN.get(name, "default")
-    svg = _ANIM_SVG.get(pat, _ANIM_SVG["default"]).replace("COLOR", color)
-    label = _ANIM_LABEL.get(pat, "Movement")
+    """Real two-frame photographic preview (start <-> finish). Returns an
+    empty string when we have no accurate image, so beginners never see a
+    misleading visual -- the form cues + full video carry those cases."""
+    frames = _EXERCISE_IMAGES.get(name)
+    if not frames:
+        return ""
+    u0 = _IMG_BASE + frames[0]
+    u1 = _IMG_BASE + frames[1] if len(frames) > 1 else u0
     return (
-        "<div style='background:#0E1218;border:1px solid rgba(255,255,255,0.05);"
-        "border-radius:9px;padding:8px 8px 6px;margin:0 0 0.6rem 0;text-align:center;'>"
-        + svg +
-        "<div style='font-size:0.62rem;color:#6B7280;margin-top:2px;letter-spacing:0.1em;"
-        "text-transform:uppercase;'>Movement preview \u00b7 " + label + "</div></div>"
+        "<div class='exa-prev'>"
+        "<div class='exa-stage'>"
+        f"<img class='exa-f exa-f0' src='{u0}' alt='{name} start position' "
+        "onerror=\"var p=this.closest('.exa-prev'); if(p){p.style.display='none';}\">"
+        f"<img class='exa-f exa-f1' src='{u1}' alt='{name} finish position'>"
+        "</div>"
+        "<div class='exa-cap'>Movement preview \u00b7 real demo photos</div>"
+        "</div>"
     )
-
 
 def pick_exercises(group, count=3, blocked=[], modified=[], injury_part=None, severity=None):
     if group in blocked: return []
@@ -1831,6 +1842,7 @@ else:
         rehab_html=render_rehab_html(rehab_condition,user_profile)
         components.html(
             "<link href='https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@700;800;900&family=Barlow:wght@400;500&display=swap' rel='stylesheet'>"
+            + "<style>.exa-prev{background:#0E1218;border:1px solid rgba(255,255,255,0.05);border-radius:9px;padding:8px 8px 6px;margin:0 0 0.6rem 0;text-align:center;}.exa-stage{position:relative;width:100%;max-width:320px;height:210px;margin:0 auto;}.exa-f{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;border-radius:6px;background:#0B0E13;}.exa-f0{animation:exaFadeA 2.6s ease-in-out infinite;}.exa-f1{animation:exaFadeB 2.6s ease-in-out infinite;}@keyframes exaFadeA{0%,38%{opacity:1}50%,92%{opacity:0}100%{opacity:1}}@keyframes exaFadeB{0%,38%{opacity:0}50%,92%{opacity:1}100%{opacity:0}}.exa-cap{font-size:0.62rem;color:#6B7280;margin-top:4px;letter-spacing:0.1em;text-transform:uppercase;}@media (prefers-reduced-motion: reduce){.exa-f0,.exa-f1{animation:none}.exa-f1{opacity:0}}</style>"
             +rehab_html, height=5500, scrolling=True)
     else:
         meta=TRAINING_TYPES.get(goal,{"cat":"hybrid","intensity":3,"emphasis":"variety"})
@@ -1842,6 +1854,7 @@ else:
         plan_html=build_workout_plan(user_profile,injury_profile)
         components.html(
             "<link href='https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@700;800;900&family=Barlow:wght@400;500&display=swap' rel='stylesheet'>"
+            + "<style>.exa-prev{background:#0E1218;border:1px solid rgba(255,255,255,0.05);border-radius:9px;padding:8px 8px 6px;margin:0 0 0.6rem 0;text-align:center;}.exa-stage{position:relative;width:100%;max-width:320px;height:210px;margin:0 auto;}.exa-f{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;border-radius:6px;background:#0B0E13;}.exa-f0{animation:exaFadeA 2.6s ease-in-out infinite;}.exa-f1{animation:exaFadeB 2.6s ease-in-out infinite;}@keyframes exaFadeA{0%,38%{opacity:1}50%,92%{opacity:0}100%{opacity:1}}@keyframes exaFadeB{0%,38%{opacity:0}50%,92%{opacity:1}100%{opacity:0}}.exa-cap{font-size:0.62rem;color:#6B7280;margin-top:4px;letter-spacing:0.1em;text-transform:uppercase;}@media (prefers-reduced-motion: reduce){.exa-f0,.exa-f1{animation:none}.exa-f1{opacity:0}}</style>"
             +plan_html, height=5200, scrolling=True)
 
     st.markdown("""<hr style="border:none;border-top:1px solid rgba(232,255,0,0.1);margin:1.5rem 0;">
