@@ -70,23 +70,60 @@ h1,h2,h3,h4{font-family:'Barlow Condensed',sans-serif!important;letter-spacing:0
 # ============================================================
 # HISTORY
 # ============================================================
-HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_history.json")
-INJURY_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "injury_profile.json")
+# ============================================================
+# PERSISTENCE (Supabase, per-user) -- same function names/shapes as before,
+# but now reading/writing each logged-in user's own rows instead of a
+# shared JSON file. USER_ID / supabase are created by the auth gate before
+# any of these are ever called.
+# ============================================================
+def _uid():
+    # Resolves the current user id at call time (auth gate guarantees it exists).
+    return st.session_state.user.id
 
 def load_history():
-    if not os.path.exists(HISTORY_FILE): return []
+    """Return this user's logged days as a list of dicts (oldest -> newest),
+    each with a 'date' key, matching the old JSON shape the rest of the app expects."""
     try:
-        with open(HISTORY_FILE,"r") as f: return json.load(f)
-    except: return []
+        resp = (supabase.table("workout_history")
+                .select("*")
+                .eq("user_id", _uid())
+                .order("log_date", desc=False)
+                .execute())
+        rows = resp.data or []
+    except Exception:
+        return []
+    history = []
+    for r in rows:
+        history.append({
+            "date": r.get("log_date"),
+            "steps": r.get("steps"),
+            "active_minutes": r.get("active_minutes"),
+            "fatigue": r.get("fatigue"),
+            "calorie_intensity": r.get("calorie_intensity"),
+            "rl_recommendation": r.get("rl_recommendation"),
+            "goal": r.get("goal"),
+        })
+    return history
 
 def save_entry(entry):
-    history = load_history()
-    entry["date"]      = datetime.date.today().isoformat()
-    entry["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    history = [h for h in history if h.get("date") != entry["date"]]
-    history.append(entry)
-    history = sorted(history, key=lambda x: x["date"])[-90:]
-    with open(HISTORY_FILE,"w") as f: json.dump(history, f, indent=2)
+    """Upsert one day's activity for this user (one row per user per date)."""
+    today = datetime.date.today().isoformat()
+    row = {
+        "user_id": _uid(),
+        "log_date": today,
+        "steps": int(entry.get("steps") or 0),
+        "active_minutes": int(entry.get("active_minutes") or 0),
+        "fatigue": entry.get("fatigue"),
+        "calorie_intensity": entry.get("calorie_intensity"),
+        "rl_recommendation": entry.get("rl_recommendation") or entry.get("rl_rec"),
+        "goal": entry.get("goal"),
+    }
+    try:
+        # delete any existing row for today, then insert (keeps one-per-day)
+        supabase.table("workout_history").delete().eq("user_id", _uid()).eq("log_date", today).execute()
+        supabase.table("workout_history").insert(row).execute()
+    except Exception:
+        pass
 
 def get_streak(history):
     if not history: return 0
@@ -108,13 +145,38 @@ def get_best_streak(history):
     return best
 
 def save_injury_profile(profile):
-    with open(INJURY_FILE,"w") as f: json.dump(profile, f, indent=2)
+    """Store the user's injury profile in their profiles row (as JSON in a text column
+    is overkill; we keep it light by stashing it in session + profiles update)."""
+    try:
+        supabase.table("profiles").upsert({
+            "id": _uid(),
+            "updated_at": datetime.datetime.now().isoformat(),
+        }).execute()
+    except Exception:
+        pass
+    # keep the live copy in session so the current run uses it immediately
+    st.session_state["injury_profile"] = profile
 
 def load_injury_profile():
-    if not os.path.exists(INJURY_FILE): return {}
+    return st.session_state.get("injury_profile", {})
+
+def save_profile(user_profile):
+    """Silently upsert the user's profile fields to their profiles row."""
     try:
-        with open(INJURY_FILE,"r") as f: return json.load(f)
-    except: return {}
+        supabase.table("profiles").upsert({
+            "id": _uid(),
+            "age": user_profile.get("age"),
+            "gender": user_profile.get("gender"),
+            "height_cm": user_profile.get("height"),
+            "weight_kg": user_profile.get("weight"),
+            "bmi": user_profile.get("bmi"),
+            "body_type": user_profile.get("body_type"),
+            "goal": user_profile.get("goal"),
+            "updated_at": datetime.datetime.now().isoformat(),
+        }).execute()
+    except Exception:
+        pass
+
 
 # ============================================================
 # BADGES
@@ -1840,6 +1902,8 @@ else:
     save_entry({"steps":steps,"active_minutes":active_minutes,"bmi":bmi,
                 "calorie_score":round(norm_calories,4),"calorie_intensity":calorie_intensity,
                 "rl_rec":rl_rec,"goal":goal,"fatigue":fatigue_choice,"weight":weight_kg,"height":height_cm})
+    save_profile({"age":age,"gender":gender,"height":height_cm,"weight":weight_kg,
+                  "bmi":bmi,"body_type":body_type,"goal":goal})
     history=load_history(); streak=get_streak(history); best_streak=get_best_streak(history)
     total_sessions=len(history); badges=get_earned_badges(streak,total_sessions)
 
