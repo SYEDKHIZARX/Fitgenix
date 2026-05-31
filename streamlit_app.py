@@ -1184,6 +1184,51 @@ def get_schedule(training_type_name, bmi_cat, fatigue, rl_rec):
 # ============================================================
 # WORKOUT PLAN BUILDER
 # ============================================================
+def get_plan_data(user_profile, injury_profile=None):
+    """Returns the 7-day plan as structured data (no HTML), using the exact
+    same schedule + exercise-selection logic as build_workout_plan, so the PDF
+    can never disagree with what is shown on screen.
+    Shape: list of {day, focus, is_rest, exercises:[{name,sets_reps,weight,muscles}]}"""
+    goal    = user_profile["goal"]
+    bmi_cat = user_profile["bmi_cat"]
+    fatigue = user_profile["fatigue"]
+    rl_rec  = user_profile["rl_rec"]
+
+    has_injury  = injury_profile and injury_profile.get("has_injury") == "Yes"
+    injury_part = injury_profile.get("body_part","") if has_injury else ""
+    severity    = injury_profile.get("severity","")  if has_injury else ""
+    blocked     = get_blocked_groups(injury_part, severity)  if has_injury else []
+    modified    = get_modified_groups(injury_part, severity) if has_injury else []
+
+    schedule, meta = get_schedule(goal, bmi_cat, fatigue, rl_rec)
+
+    if bmi_cat in ["Overweight","Obese"]:
+        schedule = [
+            (label+(" + Cardio" if "cardio" not in groups and label!="Rest & Recovery" else ""),
+             (["cardio"]+groups if "cardio" not in groups and label!="Rest & Recovery" else groups))
+            for label,groups in schedule
+        ]
+    if fatigue == "Very Fatigued":
+        schedule[0] = ("Active Recovery",["recovery","cardio"])
+    if "REST" in rl_rec.upper() and fatigue != "Fully Rested":
+        schedule[0] = ("Active Recovery",["recovery","mobility"])
+
+    days = []
+    for i,(focus,groups) in enumerate(schedule):
+        is_rest = focus in ("Rest & Recovery","Active Recovery")
+        day = {"day": i+1, "focus": focus, "is_rest": is_rest, "exercises": []}
+        if not is_rest:
+            for group in groups:
+                exercises = pick_exercises(group,count=3,blocked=blocked,modified=modified,
+                                           injury_part=injury_part,severity=severity)
+                for name,sets_reps,weight,muscles,progression in exercises:
+                    day["exercises"].append({
+                        "name": name, "sets_reps": sets_reps,
+                        "weight": weight, "muscles": muscles,
+                    })
+        days.append(day)
+    return days
+
 def build_workout_plan(user_profile, injury_profile=None):
     goal    = user_profile["goal"]
     bmi_cat = user_profile["bmi_cat"]
@@ -1587,7 +1632,8 @@ def render_progress_charts(history):
 # PDF EXPORT — unicode safe
 # ============================================================
 def generate_pdf(user_profile,bmi,bmi_cat,norm_calories,calorie_intensity,
-                 rl_rec,rl_tip,streak,total_sessions,badges,injury_profile=None):
+                 rl_rec,rl_tip,streak,total_sessions,badges,injury_profile=None,
+                 plan_days=None):
     try: from fpdf import FPDF
     except ImportError: return None
 
@@ -1612,6 +1658,23 @@ def generate_pdf(user_profile,bmi,bmi_cat,norm_calories,calorie_intensity,
             self.set_font("Helvetica","",9); self.set_text_color(107,114,128)
             self.cell(55,7,clean(label),ln=False); self.set_text_color(240,242,245)
             self.cell(0,7,clean(value),ln=True)
+        def day_header(self,n,focus):
+            self.ln(2); self.set_fill_color(232,255,0); self.set_text_color(0,0,0)
+            self.set_font("Helvetica","B",10)
+            self.cell(20,8,f"DAY {n}",ln=False,fill=True)
+            self.set_text_color(240,242,245); self.set_font("Helvetica","B",11)
+            self.cell(0,8,"  "+clean(focus).upper(),ln=True); self.ln(1)
+        def exercise(self,name,sets_reps,weight,muscles):
+            self.set_font("Helvetica","B",9); self.set_text_color(240,242,245)
+            self.cell(120,6,clean(name),ln=False)
+            self.set_font("Helvetica","B",9); self.set_text_color(232,255,0)
+            self.cell(0,6,clean(sets_reps)+("  ("+clean(weight)+")" if weight else ""),ln=True)
+            if muscles:
+                self.set_font("Helvetica","",8); self.set_text_color(107,114,128)
+                self.cell(0,5,"   "+clean(muscles),ln=True)
+        def rest_note(self):
+            self.set_font("Helvetica","I",9); self.set_text_color(107,114,128)
+            self.multi_cell(0,5,"Recovery day. Sleep 7-9 hours, hydrate, light stretching or yoga.")
 
     pdf=PDF(); pdf.add_page(); pdf.set_auto_page_break(auto=True,margin=15)
     pdf.set_font("Helvetica","",8); pdf.set_text_color(107,114,128)
@@ -1636,6 +1699,16 @@ def generate_pdf(user_profile,bmi,bmi_cat,norm_calories,calorie_intensity,
     pdf.section("Progress"); pdf.row("Current Streak",f"{streak} days")
     pdf.row("Total Sessions",str(total_sessions))
     if badges: pdf.row("Badges","  ".join([n for _,n,_ in badges]))
+    if plan_days:
+        pdf.ln(2); pdf.section("Your 7-Day Plan")
+        for d in plan_days:
+            pdf.day_header(d["day"], d["focus"])
+            if d["is_rest"] or not d["exercises"]:
+                pdf.rest_note()
+            else:
+                for ex in d["exercises"]:
+                    pdf.exercise(ex["name"], ex["sets_reps"], ex.get("weight",""), ex.get("muscles",""))
+            pdf.ln(1)
     pdf.set_y(-20); pdf.set_font("Helvetica","",7); pdf.set_text_color(55,65,81)
     pdf.cell(0,5,"FITGENIX - GA + RL + 39 Training Types + Injury-Aware AI Coach",align="C")
     # Coerce to real bytes: fpdf2 may return bytearray/str depending on version,
@@ -2027,8 +2100,10 @@ else:
     <div style="font-size:0.7rem;letter-spacing:0.2em;color:#E8FF00;text-transform:uppercase;
                 margin-bottom:0.75rem;">-- Export Your Report</div>""",unsafe_allow_html=True)
 
+    _plan_days=get_plan_data(user_profile,injury_profile)
     pdf_bytes=generate_pdf(user_profile,bmi,bmi_cat,norm_calories,calorie_intensity,
-                           rl_rec,rl_tip,streak,total_sessions,badges,injury_profile)
+                           rl_rec,rl_tip,streak,total_sessions,badges,injury_profile,
+                           plan_days=_plan_days)
     if pdf_bytes:
         st.download_button(label="Download PDF Report",data=pdf_bytes,
             file_name=f"FITGENIX_Report_{datetime.date.today().isoformat()}.pdf",
