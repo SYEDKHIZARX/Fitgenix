@@ -1638,7 +1638,14 @@ def generate_pdf(user_profile,bmi,bmi_cat,norm_calories,calorie_intensity,
     if badges: pdf.row("Badges","  ".join([n for _,n,_ in badges]))
     pdf.set_y(-20); pdf.set_font("Helvetica","",7); pdf.set_text_color(55,65,81)
     pdf.cell(0,5,"FITGENIX - GA + RL + 39 Training Types + Injury-Aware AI Coach",align="C")
-    return pdf.output()
+    # Coerce to real bytes: fpdf2 may return bytearray/str depending on version,
+    # and Streamlit's download_button requires bytes.
+    out = pdf.output()
+    if isinstance(out, (bytearray, memoryview)):
+        out = bytes(out)
+    elif isinstance(out, str):
+        out = out.encode("latin-1")
+    return out
 
 # ============================================================
 # AUTHENTICATION GATE  (Supabase) -- must be logged in to use the app
