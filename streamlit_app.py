@@ -205,6 +205,106 @@ def load_today_outcomes():
     except Exception:
         return {}
 
+# ============================================================
+# 2C: PERSONALIZED REINFORCEMENT LEARNING (closes the feedback loop)
+# Each user gets their own Q-table, seeded from the base pickled q_table,
+# then nudged by real logged outcomes (completed / skipped / too_hard).
+# Validated Q-learning update + a safety cap so repeated 'too hard' can
+# never push the recommendation to a HIGHER intensity.
+# ============================================================
+RL_ALPHA = 0.25  # learning rate
+
+def get_personal_q():
+    """Load this user's personalized Q-table (list-of-lists). Falls back to the
+    base pickled q_table for new users. Cached in session for the run."""
+    if "personal_q" in st.session_state and st.session_state.get("personal_q_uid") == _uid():
+        return np.array(st.session_state["personal_q"], dtype=float)
+    pq = None
+    try:
+        resp = supabase.table("profiles").select("q_table").eq("id", _uid()).execute()
+        if resp.data and resp.data[0].get("q_table"):
+            pq = np.array(resp.data[0]["q_table"], dtype=float)
+    except Exception:
+        pq = None
+    if pq is None or pq.shape != q_table.shape:
+        pq = np.array(q_table, dtype=float).copy()   # seed from base model
+    st.session_state["personal_q"] = pq.tolist()
+    st.session_state["personal_q_uid"] = _uid()
+    return pq
+
+def get_rl_cap(fatigue_level):
+    """Safety cap per fatigue state: if the user has logged 'too_hard' for the
+    action recommended in this state, never recommend ABOVE that action."""
+    caps = st.session_state.get("rl_caps", {})
+    return caps.get(str(fatigue_level))
+
+def rl_recommend_index(fatigue_level):
+    """Personalized recommendation: argmax over the user's Q row, restricted by
+    the safety cap so it never exceeds a known-too-hard intensity."""
+    pq = get_personal_q()
+    row = pq[fatigue_level]
+    cap = get_rl_cap(fatigue_level)
+    if cap is not None and cap < len(row) - 1:
+        idx = int(np.argmax(row[:cap + 1]))
+    else:
+        idx = int(np.argmax(row))
+    return idx
+
+def rl_learn_from_outcomes(fatigue_level, rec_action, outcomes_list):
+    """Apply the validated Q-update from this session's outcomes for one fatigue
+    state, persist the personalized table + bump the rl_updates counter.
+    outcomes_list: list of {'status','difficulty'} dicts."""
+    if not outcomes_list:
+        return
+    pq = get_personal_q()
+    row = pq[fatigue_level].copy()
+
+    too_hard = sum(1 for o in outcomes_list if o.get("difficulty") == "too_hard")
+    done     = sum(1 for o in outcomes_list if o.get("status") == "completed" and o.get("difficulty") != "too_hard")
+    skipped  = sum(1 for o in outcomes_list if o.get("status") == "skipped")
+    n = len(outcomes_list)
+    reward = max(-1.0, min(1.0, (done * 1.0 - too_hard * 1.0 - skipped * 0.4) / n))
+
+    # core update toward observed reward
+    row[rec_action] += RL_ALPHA * (reward - row[rec_action])
+    # directional nudges
+    if too_hard > 0 and rec_action > 0:
+        row[rec_action - 1] += RL_ALPHA * 0.5 * abs(reward)
+    if too_hard == 0 and done == n and rec_action < len(row) - 1:
+        row[rec_action + 1] += RL_ALPHA * 0.5 * reward
+
+    pq[fatigue_level] = row
+
+    # update the safety cap for this state
+    caps = st.session_state.get("rl_caps", {})
+    if too_hard > 0:
+        caps[str(fatigue_level)] = rec_action
+    st.session_state["rl_caps"] = caps
+
+    # persist personalized table + bump counter
+    st.session_state["personal_q"] = pq.tolist()
+    try:
+        cur = supabase.table("profiles").select("rl_updates").eq("id", _uid()).execute()
+        n_updates = (cur.data[0]["rl_updates"] if cur.data and cur.data[0].get("rl_updates") else 0) + 1
+        supabase.table("profiles").upsert({
+            "id": _uid(),
+            "q_table": pq.tolist(),
+            "rl_updates": n_updates,
+            "updated_at": datetime.datetime.now().isoformat(),
+        }).execute()
+    except Exception:
+        pass
+
+def get_rl_recommendation_personal(fatigue_level):
+    """Drop-in personalized version of get_rl_recommendation."""
+    actions = {
+        0:("REST / RECOVERY",  "#6B7280","Your body needs recovery. Prioritise sleep, hydration, and light stretching."),
+        1:("LIGHT ACTIVITY",   "#00B4FF","A gentle session - 20-30 min walk, yoga, or mobility work."),
+        2:("MODERATE WORKOUT", "#FF6B35","You are ready. Aim for 45-60 min of steady cardio or strength training."),
+        3:("HIGH INTENSITY",   "#E8FF00","Fully rested - push hard today. HIIT, heavy lifts, or interval runs.")
+    }
+    return actions[rl_recommend_index(fatigue_level)]
+
 def save_profile(user_profile):
     """Silently upsert the user's profile fields to their profiles row."""
     try:
@@ -2088,7 +2188,7 @@ else:
     active_minutes    = very_active+fairly_active+lightly_active
     norm_calories     = predict_calories(steps,distance,intensity_score,active_minutes,scaler,ga_model)
     calorie_intensity = ("Low" if norm_calories<0.33 else "Moderate" if norm_calories<0.66 else "High")
-    rl_rec,rl_color,rl_tip = get_rl_recommendation(fatigue_level)
+    rl_rec,rl_color,rl_tip = get_rl_recommendation_personal(fatigue_level)
     bmi,bmi_cat,bmi_color  = calculate_bmi(weight_kg,height_cm)
 
     save_entry({"steps":steps,"active_minutes":active_minutes,"bmi":bmi,
@@ -2264,6 +2364,13 @@ else:
                         f"Logged {len(_logged)} exercise(s) today - {_done_n} completed. "
                         f"This data will power adaptive recommendations.</div>",
                         unsafe_allow_html=True)
+            # 2C: one deliberate learning step per session on the batched outcomes
+            if st.button("Train FITGENIX on this session", key="rl_train_btn", use_container_width=True):
+                _outcomes_list = list(_logged.values())
+                _rec_idx = rl_recommend_index(fatigue_level)
+                rl_learn_from_outcomes(fatigue_level, _rec_idx, _outcomes_list)
+                st.success("FITGENIX has learned from this session. Future recommendations are now tuned to you.")
+                st.rerun()
 
     st.markdown("""<hr style="border:none;border-top:1px solid rgba(232,255,0,0.1);margin:1.5rem 0;">
     <div style="font-size:0.7rem;letter-spacing:0.2em;color:#E8FF00;text-transform:uppercase;
