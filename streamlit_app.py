@@ -102,6 +102,8 @@ def load_history():
             "calorie_intensity": r.get("calorie_intensity"),
             "rl_recommendation": r.get("rl_recommendation"),
             "goal": r.get("goal"),
+            "bmi": r.get("bmi"),
+            "calorie_score": r.get("calorie_score"),
         })
     return history
 
@@ -117,6 +119,8 @@ def save_entry(entry):
         "calorie_intensity": entry.get("calorie_intensity"),
         "rl_recommendation": entry.get("rl_recommendation") or entry.get("rl_rec"),
         "goal": entry.get("goal"),
+        "bmi": float(entry["bmi"]) if entry.get("bmi") is not None else None,
+        "calorie_score": float(entry["calorie_score"]) if entry.get("calorie_score") is not None else None,
     }
     try:
         # delete any existing row for today, then insert (keeps one-per-day)
@@ -159,6 +163,47 @@ def save_injury_profile(profile):
 
 def load_injury_profile():
     return st.session_state.get("injury_profile", {})
+
+def save_outcome(exercise_name, muscle_group, status, difficulty=None, fatigue_at_time=None):
+    """Log one exercise outcome (the feedback-loop signal) to the user's rows.
+    status: 'completed' | 'skipped' | 'too_hard' (we store too_hard as completed-with-difficulty)."""
+    today = datetime.date.today().isoformat()
+    if status == "too_hard":
+        row_status, difficulty = "completed", "too_hard"
+    else:
+        row_status = status
+    row = {
+        "user_id": _uid(),
+        "log_date": today,
+        "exercise_name": exercise_name,
+        "muscle_group": muscle_group or "",
+        "status": row_status,
+        "difficulty": difficulty,
+        "fatigue_at_time": fatigue_at_time,
+    }
+    try:
+        # one row per user/date/exercise: replace any prior log for it today
+        (supabase.table("exercise_outcomes")
+         .delete().eq("user_id", _uid()).eq("log_date", today)
+         .eq("exercise_name", exercise_name).execute())
+        supabase.table("exercise_outcomes").insert(row).execute()
+        return True
+    except Exception as e:
+        st.error(f"Could not save '{exercise_name}': {type(e).__name__}: {e}")
+        return False
+
+def load_today_outcomes():
+    """Return {exercise_name: {'status':..,'difficulty':..}} for today's logged exercises."""
+    today = datetime.date.today().isoformat()
+    try:
+        resp = (supabase.table("exercise_outcomes").select("*")
+                .eq("user_id", _uid()).eq("log_date", today).execute())
+        out = {}
+        for r in (resp.data or []):
+            out[r["exercise_name"]] = {"status": r.get("status"), "difficulty": r.get("difficulty")}
+        return out
+    except Exception:
+        return {}
 
 def save_profile(user_profile):
     """Silently upsert the user's profile fields to their profiles row."""
@@ -1229,6 +1274,53 @@ def get_plan_data(user_profile, injury_profile=None):
         days.append(day)
     return days
 
+_EMPHASIS_WHY = {
+    "volume": "high training volume to drive muscle growth",
+    "maximal": "heavy, low-rep work to build maximal strength",
+    "power": "explosive movement to develop power",
+    "explosive": "explosive movement to develop power",
+    "aesthetic": "targeted volume for muscle shape and definition",
+    "balanced": "balanced strength across the body",
+    "full_body": "full-body strength and coordination",
+    "static": "static holds to build control and stability",
+    "endurance": "higher reps to build muscular endurance",
+    "variety": "varied stimulus to keep progress steady",
+    "metabolic": "elevated heart rate to maximise calorie burn",
+    "hypertrophy": "muscle-building volume",
+}
+
+def get_exercise_reason(group, focus, meta, fatigue, cal_int,
+                        injured=False, injury_part="", modified=False):
+    """Returns a short, truthful 'why this exercise' string built only from
+    signals the recommendation engine already produced -- no invented claims."""
+    emph = meta.get("emphasis", "balanced")
+    why_emph = _EMPHASIS_WHY.get(emph, "your selected training focus")
+    g = (group or "").replace("_", " ")
+
+    bits = []
+    # core reason: goal emphasis + the muscle group this slot targets
+    if g and g not in ("cardio", "recovery", "mobility"):
+        bits.append(f"targets your {g} as part of {why_emph}")
+    elif g == "cardio":
+        bits.append("conditioning work to support your goal and recovery")
+    elif g in ("recovery", "mobility"):
+        bits.append("light movement to aid recovery without adding fatigue")
+    else:
+        bits.append(f"supports {why_emph}")
+
+    # fatigue context (only when it actually shaped the choice)
+    if fatigue == "Very Fatigued":
+        bits.append("kept lighter today because you logged high fatigue")
+    elif fatigue == "Fully Rested":
+        bits.append("you're rested, so it's programmed at full effort")
+
+    # injury context
+    if modified:
+        bits.append(f"adjusted to protect your {injury_part}")
+
+    reason = "; ".join(bits)
+    return reason[0].upper() + reason[1:] if reason else ""
+
 def build_workout_plan(user_profile, injury_profile=None):
     goal    = user_profile["goal"]
     bmi_cat = user_profile["bmi_cat"]
@@ -1348,6 +1440,9 @@ def build_workout_plan(user_profile, injury_profile=None):
                 if len(groups)>1:
                     html += (f"<div style='font-size:0.65rem;letter-spacing:0.15em;color:#6B7280;"
                              f"text-transform:uppercase;margin:0.75rem 0 0.5rem;'>-- {group.upper()}</div>")
+                _is_mod = (group in modified) if modified else False
+                _reason = get_exercise_reason(group, focus, meta, fatigue, cal_int,
+                                              injured=has_injury, injury_part=injury_part, modified=_is_mod)
                 for name,sets_reps,weight,muscles,progression in exercises:
                     _info = get_exercise_info(name, muscles)
                     _anim = get_exercise_animation(name, color)
@@ -1360,6 +1455,9 @@ def build_workout_plan(user_profile, injury_profile=None):
                         f"<div><div style='font-size:1.05rem;font-weight:700;color:#F0F2F5;margin-bottom:3px;'>{name}</div>"
                         f"{_desc}"
                         f"<div style='font-size:0.78rem;color:#9CA3AF;margin-bottom:6px;'>{muscles}</div>"
+                        f"<div style='font-size:0.74rem;color:{color};margin-bottom:6px;display:flex;gap:5px;align-items:flex-start;'>"
+                        f"<span style='font-weight:800;'>Why this?</span>"
+                        f"<span style='color:#B8C0CC;font-weight:400;'>{_reason}</span></div>"
                         f"<div style='font-size:0.75rem;color:#6B7280;font-style:italic;'>^ {progression}</div></div>"
                         f"<div style='text-align:right;flex-shrink:0;'>"
                         f"<div style='font-size:1.1rem;font-weight:800;color:{color};'>{sets_reps}</div>"
@@ -1615,18 +1713,24 @@ def render_progress_charts(history):
     with c2:
         fig=go.Figure(); fig.add_trace(go.Bar(x=df["date"],y=df["active_minutes"],marker_color="#00B4FF",opacity=0.85,name="Active Min"))
         fig.update_layout(**ly("Active Minutes")); st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False})
-    c3,c4=st.columns(2)
-    with c3:
-        fig=go.Figure(); fig.add_trace(go.Scatter(x=df["date"],y=df["bmi"],mode="lines+markers",
-            line=dict(color="#FF6B35",width=2),marker=dict(size=5,color="#FF6B35"),name="BMI"))
-        fig.add_hrect(y0=18.5,y1=24.9,fillcolor="rgba(0,230,118,0.05)",line_width=0,
-            annotation_text="Normal",annotation_font=dict(size=10,color="#00E676"))
-        fig.update_layout(**ly("BMI Trend")); st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False})
-    with c4:
-        fig=go.Figure(); fig.add_trace(go.Scatter(x=df["date"],y=df["calorie_score"],mode="lines+markers",
-            line=dict(color="#FF4D00",width=2),marker=dict(size=5,color="#FF4D00"),
-            fill="tozeroy",fillcolor="rgba(255,77,0,0.06)",name="GA Score"))
-        fig.update_layout(**ly("GA Calorie Score")); st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False})
+    # BMI + GA Score charts only render if those columns have data (older rows may lack them)
+    has_bmi = "bmi" in df.columns and df["bmi"].notna().any()
+    has_cal = "calorie_score" in df.columns and df["calorie_score"].notna().any()
+    if has_bmi or has_cal:
+        c3,c4=st.columns(2)
+        if has_bmi:
+            with c3:
+                fig=go.Figure(); fig.add_trace(go.Scatter(x=df["date"],y=df["bmi"],mode="lines+markers",
+                    line=dict(color="#FF6B35",width=2),marker=dict(size=5,color="#FF6B35"),name="BMI"))
+                fig.add_hrect(y0=18.5,y1=24.9,fillcolor="rgba(0,230,118,0.05)",line_width=0,
+                    annotation_text="Normal",annotation_font=dict(size=10,color="#00E676"))
+                fig.update_layout(**ly("BMI Trend")); st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False})
+        if has_cal:
+            with c4:
+                fig=go.Figure(); fig.add_trace(go.Scatter(x=df["date"],y=df["calorie_score"],mode="lines+markers",
+                    line=dict(color="#FF4D00",width=2),marker=dict(size=5,color="#FF4D00"),
+                    fill="tozeroy",fillcolor="rgba(255,77,0,0.06)",name="GA Score"))
+                fig.update_layout(**ly("GA Calorie Score")); st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False})
 
 # ============================================================
 # PDF EXPORT — unicode safe
@@ -1901,6 +2005,14 @@ with st.sidebar:
 
     st.markdown("---")
     generate = st.button("GENERATE MY REPORT", use_container_width=True)
+    if generate:
+        st.session_state.plan_generated = True
+
+# Persist across reruns: once generated, keep showing the plan even when
+# later button clicks (Done/Skip/Too hard) trigger a rerun.
+if "plan_generated" not in st.session_state:
+    st.session_state.plan_generated = False
+show_plan = st.session_state.plan_generated
 
 # ============================================================
 # STATE
@@ -1935,7 +2047,7 @@ def streak_banner(streak,best_streak,total_sessions,badges):
 # ============================================================
 # DEFAULT STATE
 # ============================================================
-if not generate:
+if not show_plan:
     if streak > 0:
         st.markdown(streak_banner(streak,best_streak,total_sessions,badges), unsafe_allow_html=True)
     if badges:
@@ -2095,6 +2207,63 @@ else:
             "<link href='https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@700;800;900&family=Barlow:wght@400;500&display=swap' rel='stylesheet'>"
             + "<style>.exa-prev{background:#0E1218;border:1px solid rgba(255,255,255,0.05);border-radius:9px;padding:8px 8px 6px;margin:0 0 0.6rem 0;text-align:center;}.exa-stage{position:relative;width:100%;max-width:320px;height:210px;margin:0 auto;}.exa-f{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;border-radius:6px;background:#0B0E13;}.exa-f0{animation:exaFadeA 2.6s ease-in-out infinite;}.exa-f1{animation:exaFadeB 2.6s ease-in-out infinite;}@keyframes exaFadeA{0%,38%{opacity:1}50%,92%{opacity:0}100%{opacity:1}}@keyframes exaFadeB{0%,38%{opacity:0}50%,92%{opacity:1}100%{opacity:0}}.exa-cap{font-size:0.62rem;color:#6B7280;margin-top:4px;letter-spacing:0.1em;text-transform:uppercase;}@media (prefers-reduced-motion: reduce){.exa-f0,.exa-f1{animation:none}.exa-f1{opacity:0}}</style>"
             +plan_html, height=5200, scrolling=True)
+
+        # ---- 2A: Log today's workout (feedback-loop capture) ----
+        st.markdown("""<div style="font-size:0.7rem;letter-spacing:0.2em;color:#E8FF00;
+        text-transform:uppercase;margin:1.5rem 0 0.3rem;">-- Log Today's Workout</div>
+        <div style="font-size:0.8rem;color:#6B7280;margin-bottom:1rem;">
+        Tap as you go. This trains FITGENIX to adapt to you over time.</div>""",
+        unsafe_allow_html=True)
+
+        _plan = get_plan_data(user_profile, injury_profile)
+        _logged = load_today_outcomes()
+        _fat = user_profile.get("fatigue")
+        _row_i = 0  # global counter so widget keys are unique even if an exercise repeats
+
+        for _d in _plan:
+            if _d["is_rest"] or not _d["exercises"]:
+                continue
+            st.markdown(f"<div style='font-size:0.95rem;font-weight:800;color:#F0F2F5;"
+                        f"margin:0.8rem 0 0.4rem;'>Day {_d['day']} - {_d['focus']}</div>",
+                        unsafe_allow_html=True)
+            for _ex in _d["exercises"]:
+                _name = _ex["name"]; _mus = _ex.get("muscles","")
+                _row_i += 1
+                _key = f"{_d['day']}_{_row_i}_{_name}"
+                _state = _logged.get(_name, {})
+                _status = _state.get("status"); _diff = _state.get("difficulty")
+
+                _c0, _c1, _c2, _c3 = st.columns([3, 1, 1, 1])
+                with _c0:
+                    if _status == "completed" and _diff == "too_hard":
+                        _tag = " &nbsp;<span style='color:#FF6B35;font-size:0.72rem;'>(too hard)</span>"
+                    elif _status == "completed":
+                        _tag = " &nbsp;<span style='color:#00E676;font-size:0.72rem;'>done</span>"
+                    elif _status == "skipped":
+                        _tag = " &nbsp;<span style='color:#6B7280;font-size:0.72rem;'>skipped</span>"
+                    else:
+                        _tag = ""
+                    st.markdown(f"<div style='padding-top:0.45rem;font-size:0.9rem;color:#F0F2F5;'>"
+                                f"{_name}{_tag}</div>", unsafe_allow_html=True)
+                with _c1:
+                    if st.button("Done", key=f"done_{_key}", use_container_width=True):
+                        save_outcome(_name, _mus, "completed", fatigue_at_time=_fat)
+                        st.rerun()
+                with _c2:
+                    if st.button("Skip", key=f"skip_{_key}", use_container_width=True):
+                        save_outcome(_name, _mus, "skipped", fatigue_at_time=_fat)
+                        st.rerun()
+                with _c3:
+                    if st.button("Too hard", key=f"hard_{_key}", use_container_width=True):
+                        save_outcome(_name, _mus, "too_hard", fatigue_at_time=_fat)
+                        st.rerun()
+
+        _done_n = sum(1 for v in _logged.values() if v.get("status") == "completed")
+        if _logged:
+            st.markdown(f"<div style='margin-top:1rem;font-size:0.85rem;color:#00E676;'>"
+                        f"Logged {len(_logged)} exercise(s) today - {_done_n} completed. "
+                        f"This data will power adaptive recommendations.</div>",
+                        unsafe_allow_html=True)
 
     st.markdown("""<hr style="border:none;border-top:1px solid rgba(232,255,0,0.1);margin:1.5rem 0;">
     <div style="font-size:0.7rem;letter-spacing:0.2em;color:#E8FF00;text-transform:uppercase;
