@@ -305,6 +305,89 @@ def get_rl_recommendation_personal(fatigue_level):
     }
     return actions[rl_recommend_index(fatigue_level)]
 
+def get_model_metrics():
+    """Aggregate this user's REAL logged outcomes into live model-performance
+    metrics. All numbers come from the exercise_outcomes table -- actual usage,
+    not simulation. Returns a dict (safe defaults if there's no data yet)."""
+    out = {"total": 0, "completed": 0, "skipped": 0, "too_hard": 0,
+           "completion_rate": None, "too_hard_rate": None,
+           "rl_updates": 0, "by_fatigue": {}}
+    try:
+        resp = (supabase.table("exercise_outcomes").select("*")
+                .eq("user_id", _uid()).execute())
+        rows = resp.data or []
+    except Exception:
+        rows = []
+    out["total"] = len(rows)
+    for r in rows:
+        status = r.get("status"); diff = r.get("difficulty"); fat = r.get("fatigue_at_time") or "Unknown"
+        if diff == "too_hard": out["too_hard"] += 1
+        if status == "completed": out["completed"] += 1
+        elif status == "skipped": out["skipped"] += 1
+        seg = out["by_fatigue"].setdefault(fat, {"total": 0, "completed": 0, "too_hard": 0})
+        seg["total"] += 1
+        if status == "completed": seg["completed"] += 1
+        if diff == "too_hard": seg["too_hard"] += 1
+    if out["total"]:
+        out["completion_rate"] = out["completed"] / out["total"]
+        out["too_hard_rate"] = out["too_hard"] / out["total"]
+    try:
+        p = supabase.table("profiles").select("rl_updates").eq("id", _uid()).execute()
+        if p.data and p.data[0].get("rl_updates"):
+            out["rl_updates"] = p.data[0]["rl_updates"]
+    except Exception:
+        pass
+    return out
+
+def render_model_performance():
+    """Renders the live Model Performance panel from real usage data."""
+    m = get_model_metrics()
+    st.markdown("<div style='font-size:0.7rem;letter-spacing:0.2em;color:#E8FF00;"
+                "text-transform:uppercase;margin:0.5rem 0 0.75rem;'>-- Model Performance (live)</div>",
+                unsafe_allow_html=True)
+    if m["total"] == 0:
+        st.info("No workout outcomes logged yet. Complete and log a session "
+                "(tap Done/Skip/Too hard, then 'Train FITGENIX') to start populating live metrics.")
+        return
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Completion rate", f"{m['completion_rate']*100:.0f}%",
+              help="Of logged exercises, the share marked completed.")
+    c2.metric("Too-hard rate", f"{m['too_hard_rate']*100:.0f}%",
+              help="Share flagged too hard. Adaptive RL aims to reduce this.")
+    c3.metric("RL adaptations", m["rl_updates"],
+              help="Times the personal policy has learned from your sessions.")
+    st.caption(f"Based on {m['total']} logged exercise outcomes across your sessions.")
+
+    # per-fatigue-state breakdown (where the RL actually personalises)
+    if m["by_fatigue"]:
+        rows = []
+        for fat, seg in m["by_fatigue"].items():
+            if seg["total"]:
+                rows.append({"Fatigue state": fat,
+                             "Logged": seg["total"],
+                             "Completion %": round(seg["completed"]/seg["total"]*100),
+                             "Too-hard %": round(seg["too_hard"]/seg["total"]*100)})
+        if rows:
+            st.markdown("<div style='font-size:0.75rem;color:#9CA3AF;margin:0.75rem 0 0.25rem;'>"
+                        "Breakdown by the fatigue state at the time:</div>", unsafe_allow_html=True)
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    # show the personalised vs base policy (proof of adaptation)
+    try:
+        pq = get_personal_q()
+        base = np.array(q_table, dtype=float)
+        if not np.allclose(pq, base):
+            st.markdown("<div style='font-size:0.75rem;color:#9CA3AF;margin:0.75rem 0 0.25rem;'>"
+                        "Your personalised intensity policy has diverged from the base model "
+                        "(this is the adaptation):</div>", unsafe_allow_html=True)
+            labels = ["Rested", "Slightly Fatigued", "Heavy Fatigue"][:pq.shape[0]]
+            acts = ["Rest", "Light", "Moderate", "High"][:pq.shape[1]]
+            dfp = pd.DataFrame(np.round(pq, 2), columns=acts)
+            dfp.insert(0, "Fatigue", labels)
+            st.dataframe(dfp, use_container_width=True, hide_index=True)
+    except Exception:
+        pass
+
 def save_profile(user_profile):
     """Silently upsert the user's profile fields to their profiles row."""
     try:
@@ -2042,6 +2125,8 @@ with st.sidebar:
     if st.button("Log out", key="btn_logout_sidebar"):
         _do_logout()
     st.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.08);margin:0.5rem 0 1rem;'>", unsafe_allow_html=True)
+    show_metrics = st.checkbox("Show Model Performance", value=False, key="show_metrics_toggle")
+    st.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.08);margin:0.5rem 0 1rem;'>", unsafe_allow_html=True)
     st.markdown("""
     <div style="font-family:'Barlow Condensed',sans-serif;font-size:1.4rem;font-weight:800;
                 color:#E8FF00;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:0.25rem;">
@@ -2113,6 +2198,12 @@ with st.sidebar:
 if "plan_generated" not in st.session_state:
     st.session_state.plan_generated = False
 show_plan = st.session_state.plan_generated
+
+# Live model-performance panel (sidebar toggle; off by default)
+if st.session_state.get("show_metrics_toggle"):
+    render_model_performance()
+    st.markdown("<hr style='border:none;border-top:1px solid rgba(232,255,0,0.15);margin:1.5rem 0;'>", unsafe_allow_html=True)
+
 
 # ============================================================
 # STATE
